@@ -24,7 +24,6 @@ class WPLMS_WPCOURSEWARE_INIT{
 
     private function __construct(){
     	if ( in_array( 'wp-courseware/wp-courseware.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ) ) || (function_exists('is_plugin_active') && is_plugin_active( 'wp-courseware/wp-courseware.php'))) {  
-			
 			$this->migration_status = get_option('wplms_wp_courseware_migration');
 			add_action( 'admin_notices',array($this,'migration_notice' ));
 			add_action('admin_init',array($this,'begin_migration'));
@@ -32,11 +31,20 @@ class WPLMS_WPCOURSEWARE_INIT{
     }
 
     function migration_notice() {
-    	
+    	$this->migration_status = get_option('wplms_wp_courseware_migration');
     	if(empty($this->migration_status)){
 		    ?>
 		    <div class="error notice">
 		        <p><?php printf( __('Migrate WP Courseware coruses to WPLMS %s Begin Migration Now %s', 'my_plugin_textdomain' ),'<a href="?wplms_wp_courseware_migration=1" class="button primary">','</a>'); ?></p>
+		    </div>
+		    <?php
+		}
+
+		if($this->migration_status == 1){
+			?>
+		    <div id="message" class="updated" style="position:relative;">
+		        <p><?php _e('Migration complete !', 'my_plugin_textdomain' ); ?></p>
+		        <a class="notice-dismiss" href="?wplms_wp_courseware_migration=2"></a>
 		    </div>
 		    <?php
 		}
@@ -47,6 +55,9 @@ class WPLMS_WPCOURSEWARE_INIT{
 			update_option('wplms_wp_courseware_migration',1);
 			$this->migrate_units();
 			$this->migrate_course();
+		}
+		if(!empty($_GET['wplms_wp_courseware_migration']) && ($this->migration_status == 1) && $_GET['wplms_wp_courseware_migration'] == 2){
+			update_option('wplms_wp_courseware_migration',2);
 		}
 	}
 
@@ -68,18 +79,18 @@ class WPLMS_WPCOURSEWARE_INIT{
 				);
 				$course_id = wp_insert_post($args);
 				if(!empty($course_id) && !is_wp_error($course_id)){
-					$this->migrate_course_settings($course_id,$id,$course);	
-					$this->build_curriculum($course_id);
-					$this->set_user_progress($course_id);
+					$this->migrate_course_settings($course_id,$course->course_id,$course);	
+					$this->build_curriculum($course_id,$course->course_id);
+					$this->set_user_progress($course_id,$course->course_id);
 				}
 				
 			}
 		}
 	}
 
-	function set_user_progress($course_id){
+	function set_user_progress($course_id,$id){
 		global $wpdb;
-		$progress = $wpdb->get_results("SELECT user_id,course_progress,course_final_grade_sent FROM {$wpdb->prefix}wpcw_user_courses WHERE course_id = $course_id");
+		$progress = $wpdb->get_results("SELECT user_id,course_progress,course_final_grade_sent FROM {$wpdb->prefix}wpcw_user_courses WHERE course_id = $id");
 		if(!empty($progress)){
 			foreach($progress as $prg){
 				bp_course_add_user_to_course($user_id,$course_id);
@@ -125,47 +136,49 @@ class WPLMS_WPCOURSEWARE_INIT{
 		}
 	}
 
-	function build_curriculum($course_id){
+	function build_curriculum($course_id,$id){
 
 		$curriculum = array();
 		global $wpdb;
-		$sections = $wpdb->get_results("SELECT module_id,module_title,module_order FROM {$wpdb->prefix}wpcw_modules WHERE parent_course_id = $course_id ORDER BY module_order ASC");
-
+		$q = "SELECT module_id,module_title,module_order FROM {$wpdb->prefix}wpcw_modules WHERE parent_course_id = $id ORDER BY module_order ASC";
+		$sections = $wpdb->get_results($q);
 		if(!empty($sections)){
 			foreach($sections as $section){
-				$curriculum[]=$section->module_title;
-				$module_elements = $this->module_elements($section->module_id,$course_id);
-				if(!empty($module_elements)){
-					foreach($module_elements as $element){
-						$curriculum[]=$element;
-					}	
+				if(!empty($section->module_title)){
+					$curriculum[]=$section->module_title;
+					$module_elements = $this->module_elements($section->module_id,$id,$course_id);
+					if(!empty($module_elements)){
+						foreach($module_elements as $element){
+							$curriculum[]=$element;
+						}	
+					}
 				}
 			}
 		}
 		update_post_meta($course_id,'vibe_course_curriculum',$curriculum);
 	}
 
-	function module_elements($module_id,$course_id){
+	function module_elements($module_id,$cw_course_id,$course_id){
 		global $wpdb;
-		$unitids = $wpdb->get_results("SELECT unit_id FROM {$wpdb->prefix}wpcw_units_meta WHERE parent_module_id = $module_id AND parent_course_id = $course_id ORDER BY unit_order ASC");
+		$unitids = $wpdb->get_results("SELECT unit_id FROM {$wpdb->prefix}wpcw_units_meta WHERE parent_module_id = $module_id AND parent_course_id = $cw_course_id ORDER BY unit_order ASC");
 		$unit_ids = array();
 		if(!empty($unitids)){
 			foreach($unitids as $unit_id){
-
 				$unit_ids[]=$unit_id->unit_id;
-				$quizzes = $this->migrate_quizzes($unit_id->unit_id);
+				$quizzes = $this->migrate_quizzes($unit_id->unit_id,$cw_course_id,$course_id);
 				if(!empty($quizzes)){
 					foreach($quizzes as $quiz){
-						$unit_ids = $quiz->id;
+						$unit_ids[] = $quiz->id;
 					}
 				}
 			}
 		}
 		return $unit_ids;
 	}
-	function migrate_quizzes($unit_id){
+	function migrate_quizzes($unit_id,$cw_course_id,$course_id){
 		global $wpdb;
-		$quizzes = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}wpcw_quizzes WHERE parent_unit_id = $unit_id");
+		$quizzes = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}wpcw_quizzes WHERE parent_unit_id = $unit_id AND parent_course_id = $cw_course_id");
+
 		$return_quizzes = array();
 		if(!empty($quizzes)){
 			foreach($quizzes as $quiz){
@@ -180,7 +193,7 @@ class WPLMS_WPCOURSEWARE_INIT{
 				if($quiz->quiz_attempts_allowed<=0)
 					$quiz->quiz_attempts_allowed = 0;
 
-				update_post_meta($quiz_id,'vibe_quiz_course',$quiz->parent_course_id);
+				update_post_meta($quiz_id,'vibe_quiz_course',$course_id);
 				update_post_meta($quiz_id,'vibe_duration',$quiz->quiz_timer_mode_limit);
 				update_post_meta($quiz_id,'vibe_quiz_auto_evaluate','S');
 				update_post_meta($quiz_id,'vibe_quiz_retakes',$quiz->quiz_attempts_allowed);
@@ -194,7 +207,7 @@ class WPLMS_WPCOURSEWARE_INIT{
 	function migrate_questions($quiz_id,$id){
 		global $wpdb;
 		$questions = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}wpcw_quizzes_questions as ques LEFT JOIN {$wpdb->prefix}wpcw_quizzes_questions_map as m ON ques.question_id = m.question_id WHERE m.parent_quiz_id = $id ORDER BY m.question_order");
-
+	
 		$quiz_questions = array('ques'=>array(),'marks'=>array());
 		if(!empty($questions)){
 			foreach($questions as $question){
@@ -207,10 +220,19 @@ class WPLMS_WPCOURSEWARE_INIT{
 				$question_id = wp_insert_post($args);
 				$quiz_questions['ques'][]=$question_id;
 				$quiz_questions['marks'][]=1;
-				update_post_meta($question_id,'vibe_question_options',$question->question_data_answers);
 
 	            if($question->question_type == 'multi'){
 	            	$question->question_type = 'single';
+	            	if(!empty($question->question_data_answers)){
+		            	$question_data_answers = unserialize($question->question_data_answers);
+	            		$options = array();
+	            		if(!empty($question_data_answers)){
+	            			foreach($question_data_answers as $answer){
+	            				$options[] = base64_decode($answer['answer']);
+	            			}
+							update_post_meta($question_id,'vibe_question_options',$options);
+	            		}	
+					}
 	            }
 
 	            if($question->question_type == 'open'){
@@ -226,6 +248,7 @@ class WPLMS_WPCOURSEWARE_INIT{
 	            if($question->question_correct_answer == 'false'){
 	            	$question->question_correct_answer = '0';
 	            }
+	            
 				update_post_meta($question_id,'vibe_question_type',$question->question_type);
 				update_post_meta($question_id,'vibe_question_answer',$question->question_correct_answer);
 				update_post_meta($question_id,'vibe_question_hint',$question->question_answer_hint);
