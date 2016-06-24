@@ -6,6 +6,7 @@ Description: A simple WordPress plugin to modify WPLMS template
 Version: 1.0
 Author: HK (VibeThemes)
 Author URI: http://www.vibethemes.com
+Text Domain: wplms-cwm
 */
 /*
 Copyright 2016  VibeThemes  (email : vibethemes@gmail.com)
@@ -25,3 +26,19 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 include_once 'includes/init.php';
+
+add_action( 'plugins_loaded', 'wplms_cw_migrate_language_setup' );
+function wplms_cw_migrate_language_setup(){
+    $locale = apply_filters("plugin_locale", get_locale(), 'wplms-cwm');
+    
+    $lang_dir = dirname( __FILE__ ) . '/languages/';
+    $mofile        = sprintf( '%1$s-%2$s.mo', 'wplms-cwm', $locale );
+    $mofile_local  = $lang_dir . $mofile;
+    $mofile_global = WP_LANG_DIR . '/plugins/' . $mofile;
+
+    if ( file_exists( $mofile_global ) ) {
+        load_textdomain( 'wplms-cwm', $mofile_global );
+    } else {
+        load_textdomain( 'wplms-cwm', $mofile_local );
+    }   
+}

@@ -23,10 +23,10 @@ class WPLMS_WPCOURSEWARE_INIT{
     }
 
     private function __construct(){
-    	if ( in_array( 'wp-courseware/wp-courseware.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ) ) || (function_exists('is_plugin_active') && is_plugin_active( 'wp-courseware/wp-courseware.php'))) {  
-			$this->migration_status = get_option('wplms_wp_courseware_migration');
+    	if ( in_array( 'wp-courseware/wp-courseware.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ) ) || (function_exists('is_plugin_active') && is_plugin_active( 'wp-courseware/wp-courseware.php'))) {
 			add_action( 'admin_notices',array($this,'migration_notice' ));
-			add_action('admin_init',array($this,'begin_migration'));
+			add_action('wp_ajax_migration_wp_cw_courses',array($this,'migration_wp_cw_courses'));
+			add_action('wp_ajax_migration_wp_cw_course_to_wplms',array($this,'migration_wp_cw_course_to_wplms'));
 		}
     }
 
@@ -34,31 +34,105 @@ class WPLMS_WPCOURSEWARE_INIT{
     	$this->migration_status = get_option('wplms_wp_courseware_migration');
     	if(empty($this->migration_status)){
 		    ?>
-		    <div class="error notice">
-		        <p><?php printf( __('Migrate WP Courseware coruses to WPLMS %s Begin Migration Now %s', 'my_plugin_textdomain' ),'<a href="?wplms_wp_courseware_migration=1" class="button primary">','</a>'); ?></p>
-		    </div>
-		    <?php
-		}
+		    <div id="migration_wp_cw_courses" class="error notice ">
+		        <p id="ccw_message"><?php printf( __('Migrate WP Courseware coruses to WPLMS %s Begin Migration Now %s', 'wplms-cwm' ),'<a id="begin_wplms_wpcw_migration" class="button primary">','</a>'); ?></p>
+		        <?php wp_nonce_field('security','security'); ?>
+		        <style>.wplms_ccw_progress .bar{-webkit-transition: width 0.5s ease-in-out;
+    -moz-transition: width 1s ease-in-out;-o-transition: width 1s ease-in-out;transition: width 1s ease-in-out;}</style>
+		        <script>
+		        	jQuery(document).ready(function($){
+		        		$('#begin_wplms_wpcw_migration').on('click',function(){
+			        		$.ajax({
+			                    type: "POST",
+			                    dataType: 'json',
+			                    url: ajaxurl,
+			                    data: { action: 'migration_wp_cw_courses', 
+			                              security: $('#security').val(),
+			                            },
+			                    cache: false,
+			                    success: function (json) {
 
-		if($this->migration_status == 1){
-			?>
-		    <div id="message" class="updated" style="position:relative;">
-		        <p><?php _e('Migration complete !', 'my_plugin_textdomain' ); ?></p>
-		        <a class="notice-dismiss" href="?wplms_wp_courseware_migration=2"></a>
+			                    	$('#migration_wp_cw_courses').append('<div class="wplms_ccw_progress" style="width:100%;margin-bottom:20px;height:10px;background:#fafafa;border-radius:10px;overflow:hidden;"><div class="bar" style="padding:0 1px;background:#37cc0f;height:100%;width:0;"></div></div>');
+
+			                    	var x = 0;
+			                    	var width = 100*1/json.length;
+			                    	var number = width;
+									var loopArray = function(arr) {
+									    wpcw_ajaxcall(arr[x],function(){
+									        x++;
+									        if(x < arr.length) {
+									         	loopArray(arr);   
+									        }
+									        else if (x == arr.length) {
+									        	$('#migration_wp_cw_courses').removeClass('error');
+									        	$('#migration_wp_cw_courses').addClass('updated');
+									        }
+									    }); 
+									}
+									
+									// start 'loop'
+									loopArray(json);
+
+									function wpcw_ajaxcall(obj,callback) {
+										
+				                    	$.ajax({
+				                    		type: "POST",
+						                    dataType: 'json',
+						                    url: ajaxurl,
+						                    data: {
+						                    	action:'migration_wp_cw_course_to_wplms', 
+						                        security: $('#security').val(),
+						                        id:obj.id,
+						                    },
+						                    cache: false,
+						                    success: function (html) {
+						                    	number = number + width;
+						                    	$('.wplms_ccw_progress .bar').css('width',number+'%');
+						                    	if(number >= 100){
+										        	$('#ccw_message').html('<strong>'+x+' '+'<?php _e('Courses successfully migrated from WP Courseware to WPLMS','wplms-cwm'); ?>'+'</strong>');
+										        }
+						                    }
+				                    	});
+									    // do callback when ready
+									    callback();
+									}
+			                    }
+			                });
+		        		});
+		        	});
+		        </script>
 		    </div>
 		    <?php
 		}
 	}
 
-	function begin_migration(){
-		if(!empty($_GET['wplms_wp_courseware_migration']) && empty($this->migration_status)){
-			update_option('wplms_wp_courseware_migration',1);
-			$this->migrate_units();
-			$this->migrate_course();
+
+	function migration_wp_cw_courses(){
+		if ( !isset($_POST['security']) || !wp_verify_nonce($_POST['security'],'security') || !is_user_logged_in()){
+         	_e('Security check Failed. Contact Administrator.','vibe');
+         	die();
+      	}
+
+      	global $wpdb;
+		$courses = $wpdb->get_results("SELECT course_id,course_title FROM {$wpdb->prefix}wpcw_courses");
+		$json=array();
+		foreach($courses as $course){
+			$json[]=array('id'=>$course->course_id,'title'=>$course->course_title);
 		}
-		if(!empty($_GET['wplms_wp_courseware_migration']) && ($this->migration_status == 1) && $_GET['wplms_wp_courseware_migration'] == 2){
-			update_option('wplms_wp_courseware_migration',2);
-		}
+		update_option('wplms_wp_courseware_migration',1);
+		//Migrate all the units
+		$this->migrate_units();
+
+		print_r(json_encode($json));
+		die();
+	}
+
+	function migration_wp_cw_course_to_wplms(){
+		if ( !isset($_POST['security']) || !wp_verify_nonce($_POST['security'],'security') || !is_user_logged_in()){
+         	_e('Security check Failed. Contact Administrator.','vibe');
+         	die();
+      	}
+      	$this->migrate_course($_POST['id']);
 	}
 
 	function migrate_units(){
@@ -66,9 +140,9 @@ class WPLMS_WPCOURSEWARE_INIT{
 		$wpdb->query("UPDATE {$wpdb->posts} SET post_type = 'unit' WHERE post_type = 'course_unit'");
 	}
 
-	function migrate_course(){
+	function migrate_course($course_id){
 		global $wpdb;
-		$courses = $wpdb->get_results("SELECT course_id,course_title,course_desc,course_opt_completion_wall,course_opt_use_certificate, course_opt_user_access FROM {$wpdb->prefix}wpcw_courses");
+		$courses = $wpdb->get_results("SELECT course_id,course_title,course_desc,course_opt_completion_wall,course_opt_use_certificate, course_opt_user_access FROM {$wpdb->prefix}wpcw_courses WHERE course_id = $course_id");
 		if(!empty($courses)){
 			foreach($courses as $course){
 				$args = array(
@@ -79,12 +153,13 @@ class WPLMS_WPCOURSEWARE_INIT{
 				);
 				$course_id = wp_insert_post($args);
 				if(!empty($course_id) && !is_wp_error($course_id)){
+					update_post_meta($course_id,'vibe_course_free','S');
+					update_post_meta($course_id,'vibe_duration','9999');
 					$this->migrate_course_settings($course_id,$course->course_id,$course);	
 					$this->build_curriculum($course_id,$course->course_id);
 					$this->set_user_progress($course_id,$course->course_id);
 				}
-				
-			}
+			}		
 		}
 	}
 
