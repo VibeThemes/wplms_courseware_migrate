@@ -243,7 +243,7 @@ class WPLMS_WPCOURSEWARE_INIT{
 				$quizzes = $this->migrate_quizzes($unit_id->unit_id,$cw_course_id,$course_id);
 				if(!empty($quizzes)){
 					foreach($quizzes as $quiz){
-						$unit_ids[] = $quiz->id;
+						$unit_ids[] = $quiz;
 					}
 				}
 			}
